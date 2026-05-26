@@ -1,8 +1,6 @@
-FROM golang:1.22-alpine AS build
+FROM golang:1.24-alpine AS build
 WORKDIR /src
-COPY connector-sdk/go /src/connector-sdk/go
-COPY examples/device-connectors/homeassistant-service /src/examples/device-connectors/homeassistant-service
-WORKDIR /src/examples/device-connectors/homeassistant-service
+COPY . /src
 RUN go build -o /out/homeassistant-service .
 
 FROM alpine:3.20
