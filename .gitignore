@@ -1,0 +1,6 @@
+*.test
+*.out
+bin/
+dist/
+.coverprofile
+.DS_Store

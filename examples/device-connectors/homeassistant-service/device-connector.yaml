@@ -1,0 +1,26 @@
+apiVersion: device-connector/v1alpha1
+kind: DeviceConnectorManifest
+metadata:
+  name: homeassistant
+  displayName: "HomeAssistant 接入服务"
+  connectorKey: homeassistant
+  version: "1.0.0"
+
+spec:
+  image: homeassistant-service:1.0.0
+  httpPort: 9001
+  healthCheckPath: /health
+  mqttTopicPrefix: "plugin/homeassistant/"
+  deviceTypeSupport: direct
+  httpCallbacksEnabled: true
+  additionalInfo:
+    integration_kind: service_access
+    supported_modes:
+      - homeassistant
+  envVars:
+    LOG_LEVEL: "info"
+  resources:
+    cpuRequest: "100m"
+    memoryRequest: "64Mi"
+    cpuLimit: "500m"
+    memoryLimit: "256Mi"
