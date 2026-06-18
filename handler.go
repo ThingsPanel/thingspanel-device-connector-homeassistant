@@ -2,37 +2,57 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	sdk "github.com/thingspanel/device-connector-sdk-go"
 )
 
 type homeAssistantServiceHandler struct {
-	logger  *slog.Logger
-	ha      *homeAssistantClient
-	devices map[string]sdk.DeviceAddRequest
+	logger           *slog.Logger
+	mu               sync.RWMutex
+	devices          map[string]sdk.DeviceAddRequest
+	deviceNumberIDs  map[string]string
+	immediateTelemCh chan sdk.DeviceAddRequest
 }
 
 func newHomeAssistantServiceHandler() *homeAssistantServiceHandler {
-	h := &homeAssistantServiceHandler{
-		logger:  slog.Default(),
-		devices: make(map[string]sdk.DeviceAddRequest),
+	return &homeAssistantServiceHandler{
+		logger:           slog.Default(),
+		devices:          make(map[string]sdk.DeviceAddRequest),
+		deviceNumberIDs:  make(map[string]string),
+		immediateTelemCh: make(chan sdk.DeviceAddRequest, 32),
 	}
-	ha, err := newHomeAssistantClientFromEnv()
-	if err != nil {
-		slog.Warn("home assistant control disabled", "err", err)
-	} else {
-		h.ha = ha
-	}
-	return h
 }
 
-func (h *homeAssistantServiceHandler) FormConfig(context.Context) (sdk.FormConfig, error) {
+func (h *homeAssistantServiceHandler) FormConfig(_ context.Context) (sdk.FormConfig, error) {
+	return h.accessPointFormConfig(), nil
+}
+
+func (h *homeAssistantServiceHandler) FormConfigFor(_ context.Context, req sdk.FormConfigRequest) (sdk.FormConfig, error) {
+	switch req.FormType {
+	case "CFG":
+		return h.deviceFormConfig(), nil
+	default:
+		return h.accessPointFormConfig(), nil
+	}
+}
+
+func (h *homeAssistantServiceHandler) RawFormDataFor(_ context.Context, req sdk.FormConfigRequest) (data any, handled bool, err error) {
+	if req.FormType == "VCRT" {
+		return map[string]any{}, true, nil
+	}
+	return nil, false, nil
+}
+
+func (h *homeAssistantServiceHandler) accessPointFormConfig() sdk.FormConfig {
 	return sdk.FormConfig{Schema: map[string]any{
 		"type":  "object",
 		"title": "HomeAssistant 接入服务",
@@ -41,7 +61,15 @@ func (h *homeAssistantServiceHandler) FormConfig(context.Context) (sdk.FormConfi
 			"token":    map[string]any{"type": "string", "title": "长期访问令牌", "inputType": "password"},
 		},
 		"required": []string{"base_url", "token"},
-	}}, nil
+	}}
+}
+
+func (h *homeAssistantServiceHandler) deviceFormConfig() sdk.FormConfig {
+	return sdk.FormConfig{Schema: map[string]any{
+		"type":       "object",
+		"title":      "HomeAssistant 设备配置",
+		"properties": map[string]any{},
+	}}
 }
 
 func (h *homeAssistantServiceHandler) ListDevices(ctx context.Context, req sdk.DeviceListRequest) (sdk.DeviceListResponse, error) {
@@ -51,9 +79,7 @@ func (h *homeAssistantServiceHandler) ListDevices(ctx context.Context, req sdk.D
 			return sdk.DeviceListResponse{}, fmt.Errorf("invalid voucher json: %w", err)
 		}
 	}
-	baseURL := configString(cfg, "base_url", envAny("HA_BASE_URL", "HOME_ASSISTANT_BASE_URL"))
-	token := configString(cfg, "token", envAny("HA_ACCESS_TOKEN", "HOME_ASSISTANT_TOKEN"))
-	client, err := newHomeAssistantClient(baseURL, token)
+	client, err := h.haClientFromConfig(cfg)
 	if err != nil {
 		return sdk.DeviceListResponse{}, err
 	}
@@ -71,9 +97,11 @@ func (h *homeAssistantServiceHandler) ListDevices(ctx context.Context, req sdk.D
 		if friendly, ok := state.Attributes["friendly_name"].(string); ok && strings.TrimSpace(friendly) != "" {
 			name = friendly
 		}
+		deviceNumber := normalizedDeviceNumber("ha", state.EntityID)
 		protocolConfig := jsonString(map[string]any{
-			"entity_id": state.EntityID,
-			"domain":    domain,
+			"entity_id":     state.EntityID,
+			"domain":        domain,
+			"device_number": deviceNumber,
 		})
 		additionalInfo := jsonString(map[string]any{
 			"source": "homeassistant-service",
@@ -81,7 +109,7 @@ func (h *homeAssistantServiceHandler) ListDevices(ctx context.Context, req sdk.D
 		})
 		devices = append(devices, sdk.DiscoveredDevice{
 			DeviceName:     name,
-			DeviceNumber:   normalizedDeviceNumber("ha", state.EntityID),
+			DeviceNumber:   deviceNumber,
 			Description:    "Home Assistant entity: " + state.EntityID,
 			ProtocolConfig: protocolConfig,
 			AdditionalInfo: additionalInfo,
@@ -91,21 +119,48 @@ func (h *homeAssistantServiceHandler) ListDevices(ctx context.Context, req sdk.D
 }
 
 func (h *homeAssistantServiceHandler) OnDeviceAdd(_ context.Context, req sdk.DeviceAddRequest) error {
-	h.logger.Info("home assistant device added", "deviceID", req.DeviceID)
+	deviceNumber := deviceNumberFromAdd(req)
+	h.logger.Info("home assistant device added", "deviceID", req.DeviceID, "number", deviceNumber)
+
+	h.mu.Lock()
 	h.devices[req.DeviceID] = req
+	if deviceNumber != "" {
+		h.deviceNumberIDs[deviceNumber] = req.DeviceID
+	}
+	h.mu.Unlock()
+
+	select {
+	case h.immediateTelemCh <- req:
+	default:
+	}
 	return nil
 }
 
 func (h *homeAssistantServiceHandler) OnDeviceDelete(_ context.Context, req sdk.DeviceDeleteRequest) error {
+	h.mu.Lock()
+	if existing, ok := h.devices[req.DeviceID]; ok {
+		delete(h.deviceNumberIDs, deviceNumberFromAdd(existing))
+	}
 	delete(h.devices, req.DeviceID)
+	h.mu.Unlock()
 	return nil
 }
 
 func (h *homeAssistantServiceHandler) OnConfigUpdate(_ context.Context, req sdk.ConfigUpdateRequest) error {
+	h.mu.Lock()
 	if existing, ok := h.devices[req.DeviceID]; ok {
+		oldNumber := deviceNumberFromAdd(existing)
 		existing.DeviceConfig = req.DeviceConfig
 		h.devices[req.DeviceID] = existing
+		newNumber := deviceNumberFromAdd(existing)
+		if oldNumber != "" && oldNumber != newNumber {
+			delete(h.deviceNumberIDs, oldNumber)
+		}
+		if newNumber != "" {
+			h.deviceNumberIDs[newNumber] = req.DeviceID
+		}
 	}
+	h.mu.Unlock()
 	return nil
 }
 
@@ -118,10 +173,11 @@ func (h *homeAssistantServiceHandler) OnEvent(context.Context, sdk.EventNotifica
 }
 
 func (h *homeAssistantServiceHandler) OnCommand(ctx context.Context, req sdk.CommandRequest) (sdk.CommandResponse, error) {
-	if h.ha == nil {
-		return sdk.CommandResponse{}, fmt.Errorf("home assistant is not configured")
-	}
 	cfg := h.configFor(req.DeviceID)
+	ha, err := h.haClientFromConfig(cfg)
+	if err != nil {
+		return sdk.CommandResponse{}, fmt.Errorf("home assistant is not configured: %w", err)
+	}
 	entityID := configString(cfg, "entity_id", envAny("HA_ENTITY_ID", "HA_LIGHT_ENTITY_ID", "HA_YEELIGHT_ENTITY_ID"))
 	if entityID == "" {
 		return sdk.CommandResponse{}, fmt.Errorf("entity_id is required")
@@ -136,7 +192,7 @@ func (h *homeAssistantServiceHandler) OnCommand(ctx context.Context, req sdk.Com
 		if err != nil {
 			return sdk.CommandResponse{}, err
 		}
-		if err := h.ha.SetState(ctx, entityID, state); err != nil {
+		if err := ha.SetState(ctx, entityID, state); err != nil {
 			return sdk.CommandResponse{}, fmt.Errorf("home assistant switch control failed: %w", err)
 		}
 		return sdk.CommandResponse{OK: true, Message: fmt.Sprintf("homeassistant %s switch=%s", entityID, state)}, nil
@@ -145,7 +201,7 @@ func (h *homeAssistantServiceHandler) OnCommand(ctx context.Context, req sdk.Com
 		if err != nil {
 			return sdk.CommandResponse{}, err
 		}
-		if err := h.ha.SetBrightnessPercent(ctx, entityID, brightness); err != nil {
+		if err := ha.SetBrightnessPercent(ctx, entityID, brightness); err != nil {
 			return sdk.CommandResponse{}, fmt.Errorf("home assistant brightness control failed: %w", err)
 		}
 		return sdk.CommandResponse{OK: true, Message: fmt.Sprintf("homeassistant %s brightness=%d", entityID, brightness)}, nil
@@ -154,7 +210,7 @@ func (h *homeAssistantServiceHandler) OnCommand(ctx context.Context, req sdk.Com
 		if queryKey != "" && queryKey != "state" {
 			return sdk.CommandResponse{}, fmt.Errorf("unsupported home assistant query %q", queryKey)
 		}
-		state, err := h.ha.GetState(ctx, entityID)
+		state, err := ha.GetState(ctx, entityID)
 		if err != nil {
 			return sdk.CommandResponse{}, fmt.Errorf("home assistant state query failed: %w", err)
 		}
@@ -164,7 +220,15 @@ func (h *homeAssistantServiceHandler) OnCommand(ctx context.Context, req sdk.Com
 	}
 }
 
+func (h *homeAssistantServiceHandler) haClientFromConfig(cfg map[string]any) (*homeAssistantClient, error) {
+	baseURL := configString(cfg, "base_url", envAny("HA_BASE_URL", "HOME_ASSISTANT_BASE_URL"))
+	token := configString(cfg, "token", envAny("HA_ACCESS_TOKEN", "HOME_ASSISTANT_TOKEN"))
+	return newHomeAssistantClient(baseURL, token)
+}
+
 func (h *homeAssistantServiceHandler) configFor(deviceID string) map[string]any {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	if req, ok := h.devices[deviceID]; ok && req.DeviceConfig != nil {
 		return req.DeviceConfig
 	}
@@ -173,6 +237,34 @@ func (h *homeAssistantServiceHandler) configFor(deviceID string) map[string]any 
 		"entity_id": envAny("HA_ENTITY_ID", "HA_LIGHT_ENTITY_ID", "HA_YEELIGHT_ENTITY_ID"),
 		"token":     envAny("HA_ACCESS_TOKEN", "HOME_ASSISTANT_TOKEN"),
 	}
+}
+
+func (h *homeAssistantServiceHandler) deviceIDForNumber(deviceNumber string) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.deviceNumberIDs[deviceNumber]
+}
+
+func (h *homeAssistantServiceHandler) boundDevices() []sdk.DeviceAddRequest {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	devices := make([]sdk.DeviceAddRequest, 0, len(h.devices))
+	for _, req := range h.devices {
+		devices = append(devices, req)
+	}
+	return devices
+}
+
+func deviceNumberFromAdd(req sdk.DeviceAddRequest) string {
+	if req.DeviceConfig != nil {
+		if dn := configString(req.DeviceConfig, "device_number", ""); dn != "" {
+			return dn
+		}
+		if entityID := configString(req.DeviceConfig, "entity_id", ""); entityID != "" {
+			return normalizedDeviceNumber("ha", entityID)
+		}
+	}
+	return ""
 }
 
 func hasCommand(command map[string]any, key string) bool {
@@ -249,12 +341,12 @@ func envAny(keys ...string) string {
 }
 
 func normalizedDeviceNumber(prefix, value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
+	source := strings.ToLower(strings.TrimSpace(value))
 	replacer := strings.NewReplacer(".", "-", "_", "-", " ", "-", "/", "-", ":", "-")
-	value = replacer.Replace(value)
+	normalized := replacer.Replace(source)
 	var b strings.Builder
 	lastDash := false
-	for _, r := range value {
+	for _, r := range normalized {
 		allowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 		if allowed {
 			b.WriteRune(r)
@@ -271,11 +363,22 @@ func normalizedDeviceNumber(prefix, value string) string {
 		slug = "device"
 	}
 	result := prefix + "-" + slug
-	if len(result) > 36 {
-		result = result[:36]
-		result = strings.TrimRight(result, "-")
+	if len(result) <= 36 {
+		return result
 	}
-	return result
+
+	// ThingsPanel device_number is capped at 36 chars. Plain truncation makes
+	// long Home Assistant entity IDs collide (e.g. all iPhone sensors become
+	// ha-sensor-zhang-jun-hong-s-iphone-17). Keep a readable prefix and append
+	// a deterministic hash of the full source identity.
+	hash := sha256.Sum256([]byte(source))
+	suffix := hex.EncodeToString(hash[:4]) // 8 hex chars
+	maxReadable := 36 - 1 - len(suffix)
+	readable := result
+	if len(readable) > maxReadable {
+		readable = strings.TrimRight(readable[:maxReadable], "-")
+	}
+	return readable + "-" + suffix
 }
 
 func paginateDevices(devices []sdk.DiscoveredDevice, page, pageSize int) sdk.DeviceListResponse {

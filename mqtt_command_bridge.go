@@ -13,12 +13,10 @@ import (
 )
 
 type mqttCommandBridge struct {
-	info         sdk.ConnectorInfo
-	handler      *homeAssistantServiceHandler
-	broker       string
-	deviceID     string
-	deviceNumber string
-	logger       *slog.Logger
+	info    sdk.ConnectorInfo
+	handler *homeAssistantServiceHandler
+	broker  string
+	logger  *slog.Logger
 }
 
 type mqttCommandPayload struct {
@@ -27,22 +25,18 @@ type mqttCommandPayload struct {
 }
 
 func startMQTTCommandBridge(ctx context.Context, info sdk.ConnectorInfo, handler *homeAssistantServiceHandler) {
-	bridge, err := newMQTTCommandBridge(info, handler)
-	if err != nil {
-		slog.Warn("mqtt command bridge disabled", "err", err)
+	broker := envAny("TP_MQTT_BROKER", "MQTT_BROKER")
+	if broker == "" {
+		slog.Warn("mqtt command bridge disabled: TP_MQTT_BROKER not set")
 		return
 	}
-	go bridge.run(ctx)
-}
-
-func newMQTTCommandBridge(info sdk.ConnectorInfo, handler *homeAssistantServiceHandler) (*mqttCommandBridge, error) {
-	broker := envAny("TP_MQTT_BROKER", "MQTT_BROKER")
-	deviceID := envAny("HA_TP_DEVICE_ID", "HOMEASSISTANT_TP_DEVICE_ID")
-	deviceNumber := envAny("HA_MQTT_USERNAME", "HOMEASSISTANT_MQTT_USERNAME")
-	if broker == "" || deviceID == "" || deviceNumber == "" {
-		return nil, fmt.Errorf("TP_MQTT_BROKER, HA_TP_DEVICE_ID, and HA_MQTT_USERNAME are required")
+	bridge := &mqttCommandBridge{
+		info:    info,
+		handler: handler,
+		broker:  broker,
+		logger:  slog.Default(),
 	}
-	return &mqttCommandBridge{info: info, handler: handler, broker: broker, deviceID: deviceID, deviceNumber: deviceNumber, logger: slog.Default()}, nil
+	go bridge.run(ctx)
 }
 
 func (b *mqttCommandBridge) run(ctx context.Context) {
@@ -57,16 +51,20 @@ func (b *mqttCommandBridge) run(ctx context.Context) {
 	if pass := envAny("TP_MQTT_PASS", "MQTT_PASS", "MQTT_PASSWORD"); pass != "" {
 		opts.SetPassword(pass)
 	}
-	commandTopic := fmt.Sprintf("plugin/%s/devices/command/%s/+", b.info.ServiceIdentifier, b.deviceNumber)
+
+	pluginTopic := fmt.Sprintf("plugin/%s/devices/command/+/+", b.info.ServiceIdentifier)
+	nativeTopic := "devices/command/+/+"
 	opts.OnConnect = func(client mqtt.Client) {
-		token := client.Subscribe(commandTopic, 1, b.handleCommandMessage)
+		filters := map[string]byte{pluginTopic: 1, nativeTopic: 1}
+		token := client.SubscribeMultiple(filters, b.handleCommandMessage)
 		token.Wait()
 		if err := token.Error(); err != nil {
-			b.logger.Error("subscribe failed", "topic", commandTopic, "err", err)
+			b.logger.Error("subscribe failed", "err", err)
 			return
 		}
-		b.logger.Info("mqtt command bridge subscribed", "topic", commandTopic)
+		b.logger.Info("mqtt command bridge subscribed", "topics", []string{pluginTopic, nativeTopic})
 	}
+
 	client := mqtt.NewClient(opts)
 	token := client.Connect()
 	token.Wait()
@@ -79,22 +77,47 @@ func (b *mqttCommandBridge) run(ctx context.Context) {
 }
 
 func (b *mqttCommandBridge) handleCommandMessage(client mqtt.Client, msg mqtt.Message) {
-	messageID := messageIDFromTopic(msg.Topic())
-	req, err := b.decodeCommand(msg.Payload())
-	if err != nil {
-		b.publishResponse(client, messageID, err)
+	if strings.HasPrefix(strings.Trim(msg.Topic(), "/"), "devices/command/response/") {
 		return
 	}
+	messageID := haMessageIDFromTopic(msg.Topic())
+	deviceNumber := haDeviceNumberFromTopic(msg.Topic())
+	b.logger.Info(
+		"mqtt command received",
+		"topic", msg.Topic(),
+		"deviceNumber", deviceNumber,
+		"messageID", messageID,
+		"payload", string(msg.Payload()),
+	)
+
+	req, err := b.decodeCommand(deviceNumber, msg.Payload())
+	if err != nil {
+		b.logger.Warn(
+			"mqtt command decode failed",
+			"topic", msg.Topic(),
+			"deviceNumber", deviceNumber,
+			"messageID", messageID,
+			"err", err,
+		)
+		b.publishResponse(client, "", messageID, err)
+		return
+	}
+
 	resp, err := b.handler.OnCommand(context.Background(), req)
 	if err != nil {
-		b.publishResponse(client, messageID, err)
+		b.publishResponse(client, req.DeviceID, messageID, err)
 		return
 	}
-	b.logger.Info("command handled", "message", resp.Message)
-	b.publishResponse(client, messageID, nil)
+	b.logger.Info("command handled", "deviceID", req.DeviceID, "message", resp.Message)
+	b.publishResponse(client, req.DeviceID, messageID, nil)
 }
 
-func (b *mqttCommandBridge) decodeCommand(payload []byte) (sdk.CommandRequest, error) {
+func (b *mqttCommandBridge) decodeCommand(deviceNumber string, payload []byte) (sdk.CommandRequest, error) {
+	deviceID := strings.TrimSpace(b.handler.deviceIDForNumber(deviceNumber))
+	if deviceID == "" {
+		return sdk.CommandRequest{}, fmt.Errorf("device number %s is not bound in connector", deviceNumber)
+	}
+
 	var in mqttCommandPayload
 	if err := json.Unmarshal(payload, &in); err != nil {
 		return sdk.CommandRequest{}, err
@@ -105,22 +128,30 @@ func (b *mqttCommandBridge) decodeCommand(payload []byte) (sdk.CommandRequest, e
 			return sdk.CommandRequest{}, err
 		}
 	}
-	return sdk.CommandRequest{DeviceID: b.deviceID, Command: map[string]any{in.Method: params}}, nil
+	return sdk.CommandRequest{DeviceID: deviceID, Command: map[string]any{in.Method: params}}, nil
 }
 
-func (b *mqttCommandBridge) publishResponse(client mqtt.Client, messageID string, err error) {
+func (b *mqttCommandBridge) publishResponse(client mqtt.Client, deviceID, messageID string, err error) {
 	values := map[string]any{"result": 0, "message": "success", "ts": time.Now().Unix()}
 	if err != nil {
 		values["result"] = 1
 		values["errcode"] = "000"
 		values["message"] = err.Error()
 	}
-	payload, _ := json.Marshal(map[string]any{"device_id": b.deviceID, "values": values})
+	payload, _ := json.Marshal(map[string]any{"device_id": deviceID, "values": values})
 	token := client.Publish("devices/command/response/"+messageID, 1, false, payload)
 	token.Wait()
 }
 
-func messageIDFromTopic(topic string) string {
+func haDeviceNumberFromTopic(topic string) string {
+	parts := strings.Split(strings.Trim(topic, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[len(parts)-2]
+}
+
+func haMessageIDFromTopic(topic string) string {
 	parts := strings.Split(strings.Trim(topic, "/"), "/")
 	if len(parts) == 0 {
 		return ""

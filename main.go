@@ -29,6 +29,7 @@ func main() {
 
 	startMQTTCommandBridge(ctx, info, handler)
 	startHomeAssistantTelemetry(ctx, handler)
+	startStartupSync(ctx, info, handler)
 
 	if err := server.Run(ctx); err != nil {
 		slog.Error("server exited with error", "err", err)

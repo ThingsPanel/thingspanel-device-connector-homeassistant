@@ -19,28 +19,10 @@ type homeAssistantClient struct {
 }
 
 type homeAssistantState struct {
-	EntityID   string         `json:"entity_id"`
-	State      string         `json:"state"`
-	Attributes map[string]any `json:"attributes"`
-}
-
-func newHomeAssistantClientFromEnv() (*homeAssistantClient, error) {
-	baseURL := strings.TrimRight(envAny("HA_BASE_URL", "HOME_ASSISTANT_BASE_URL"), "/")
-	token := envAny("HA_ACCESS_TOKEN", "HOME_ASSISTANT_TOKEN")
-	if baseURL == "" && token == "" {
-		return nil, nil
-	}
-	if baseURL == "" {
-		return nil, fmt.Errorf("HA_BASE_URL is required when Home Assistant control is configured")
-	}
-	if token == "" {
-		return nil, fmt.Errorf("HA_ACCESS_TOKEN is required when Home Assistant control is configured")
-	}
-	return &homeAssistantClient{
-		baseURL: baseURL,
-		token:   token,
-		client:  &http.Client{Timeout: homeAssistantCommandTimeout},
-	}, nil
+	EntityID    string         `json:"entity_id"`
+	State       string         `json:"state"`
+	Attributes  map[string]any `json:"attributes"`
+	LastUpdated string         `json:"last_updated"`
 }
 
 func (c *homeAssistantClient) SetState(ctx context.Context, entityID, state string) error {
