@@ -40,16 +40,26 @@ func (c *homeAssistantClient) SetState(ctx context.Context, entityID, state stri
 }
 
 func (c *homeAssistantClient) SetBrightnessPercent(ctx context.Context, entityID string, percent int) error {
-	if entityDomain(entityID) != "light" {
-		return fmt.Errorf("brightness is only supported for light entities, got %q", entityID)
-	}
 	if percent < 1 || percent > 100 {
 		return fmt.Errorf("brightness percent must be between 1 and 100, got %d", percent)
 	}
-	return c.post(ctx, "/api/services/light/turn_on", map[string]any{
-		"entity_id":      entityID,
-		"brightness_pct": percent,
-	})
+	return c.TurnOn(ctx, entityID, map[string]any{"brightness_pct": percent})
+}
+
+// TurnOn calls Home Assistant light.turn_on with entity_id plus any supported
+// service fields (effect, rgb_color, color_temp, brightness_pct, etc.).
+func (c *homeAssistantClient) TurnOn(ctx context.Context, entityID string, params map[string]any) error {
+	if entityDomain(entityID) != "light" {
+		return fmt.Errorf("turn_on is only supported for light entities, got %q", entityID)
+	}
+	payload := map[string]any{"entity_id": entityID}
+	for key, value := range params {
+		if strings.TrimSpace(key) == "" || key == "entity_id" {
+			continue
+		}
+		payload[key] = value
+	}
+	return c.post(ctx, "/api/services/light/turn_on", payload)
 }
 
 func (c *homeAssistantClient) GetState(ctx context.Context, entityID string) (homeAssistantState, error) {

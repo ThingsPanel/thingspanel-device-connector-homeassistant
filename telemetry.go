@@ -186,6 +186,7 @@ func publishHomeAssistantDeviceTelemetryFromState(
 			payload["ha_brightness_pct"] = pct
 		}
 	}
+	appendHomeAssistantLightAttributes(payload, state.Attributes)
 
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -230,6 +231,34 @@ func brightnessPercentFromFloat(value float64) (int, bool) {
 		return 0, false
 	}
 	return int((value / 255.0 * 100.0) + 0.5), true
+}
+
+// appendHomeAssistantLightAttributes copies common HA light state attributes into
+// telemetry using an ha_* prefix. Works for any light entity (WLED, Yeelight, etc.).
+func appendHomeAssistantLightAttributes(payload map[string]any, attrs map[string]any) {
+	if payload == nil || attrs == nil {
+		return
+	}
+	for _, key := range []string{
+		"effect",
+		"color_mode",
+		"color_temp",
+		"color_temp_kelvin",
+		"rgb_color",
+		"hs_color",
+		"xy_color",
+		"color_name",
+		"supported_color_modes",
+		"effect_list",
+		"min_color_temp_kelvin",
+		"max_color_temp_kelvin",
+	} {
+		value, ok := attrs[key]
+		if !ok || value == nil {
+			continue
+		}
+		payload["ha_"+key] = value
+	}
 }
 
 func publishHomeAssistantStatusOnly(cfg homeAssistantTelemetryConfig, deviceID, accessToken string, online bool) {

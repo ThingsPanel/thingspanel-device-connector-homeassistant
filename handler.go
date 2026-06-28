@@ -205,6 +205,15 @@ func (h *homeAssistantServiceHandler) OnCommand(ctx context.Context, req sdk.Com
 			return sdk.CommandResponse{}, fmt.Errorf("home assistant brightness control failed: %w", err)
 		}
 		return sdk.CommandResponse{OK: true, Message: fmt.Sprintf("homeassistant %s brightness=%d", entityID, brightness)}, nil
+	case hasCommand(req.Command, "turn_on"):
+		params, err := parseTurnOnParams(req.Command["turn_on"])
+		if err != nil {
+			return sdk.CommandResponse{}, err
+		}
+		if err := ha.TurnOn(ctx, entityID, params); err != nil {
+			return sdk.CommandResponse{}, fmt.Errorf("home assistant turn_on failed: %w", err)
+		}
+		return sdk.CommandResponse{OK: true, Message: fmt.Sprintf("homeassistant %s turn_on=%v", entityID, params)}, nil
 	case hasCommand(req.Command, "query"):
 		queryKey := strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Command["query"])))
 		if queryKey != "" && queryKey != "state" {
@@ -320,6 +329,28 @@ func validatePercent(n int) (int, error) {
 		return 0, fmt.Errorf("percentage must be between 1 and 100, got %d", n)
 	}
 	return n, nil
+}
+
+func parseTurnOnParams(v any) (map[string]any, error) {
+	switch value := v.(type) {
+	case map[string]any:
+		if len(value) == 0 {
+			return nil, fmt.Errorf("turn_on params must be a non-empty object")
+		}
+		return value, nil
+	case nil:
+		return nil, fmt.Errorf("turn_on params are required")
+	default:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("turn_on params must be an object, got %T", v)
+		}
+		var params map[string]any
+		if err := json.Unmarshal(raw, &params); err != nil || len(params) == 0 {
+			return nil, fmt.Errorf("turn_on params must be a non-empty object")
+		}
+		return params, nil
+	}
 }
 
 func configString(cfg map[string]any, key, fallback string) string {

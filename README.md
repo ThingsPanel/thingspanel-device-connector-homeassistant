@@ -59,6 +59,8 @@ Examples:
 - `{"method":"switch","params":"on"}`
 - `{"method":"switch","params":"off"}`
 - `{"method":"brightness","params":35}`
+- `{"method":"turn_on","params":{"effect":"Rainbow"}}`
+- `{"method":"turn_on","params":{"rgb_color":[255,0,0],"brightness_pct":80}}`
 - `{"method":"query","params":"state"}`
 
 Local helper:
