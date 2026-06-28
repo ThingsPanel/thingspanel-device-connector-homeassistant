@@ -178,7 +178,7 @@ func (h *homeAssistantServiceHandler) OnCommand(ctx context.Context, req sdk.Com
 	if err != nil {
 		return sdk.CommandResponse{}, fmt.Errorf("home assistant is not configured: %w", err)
 	}
-	entityID := configString(cfg, "entity_id", envAny("HA_ENTITY_ID", "HA_LIGHT_ENTITY_ID", "HA_YEELIGHT_ENTITY_ID"))
+	entityID := configString(cfg, "entity_id", envAny("HA_ENTITY_ID", "HA_LIGHT_ENTITY_ID"))
 	if entityID == "" {
 		return sdk.CommandResponse{}, fmt.Errorf("entity_id is required")
 	}
@@ -234,7 +234,7 @@ func (h *homeAssistantServiceHandler) configFor(deviceID string) map[string]any 
 	}
 	return map[string]any{
 		"base_url":  envAny("HA_BASE_URL", "HOME_ASSISTANT_BASE_URL"),
-		"entity_id": envAny("HA_ENTITY_ID", "HA_LIGHT_ENTITY_ID", "HA_YEELIGHT_ENTITY_ID"),
+		"entity_id": envAny("HA_ENTITY_ID", "HA_LIGHT_ENTITY_ID"),
 		"token":     envAny("HA_ACCESS_TOKEN", "HOME_ASSISTANT_TOKEN"),
 	}
 }

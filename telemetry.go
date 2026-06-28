@@ -174,6 +174,7 @@ func publishHomeAssistantDeviceTelemetryFromState(
 
 	payload := map[string]any{
 		"ha_online":      true,
+		"ha_domain":      entityDomain(entityID),
 		"ha_entity_id":   entityID,
 		"ha_state":       state.State,
 		"ha_source":      "homeassistant-service",
@@ -181,6 +182,9 @@ func publishHomeAssistantDeviceTelemetryFromState(
 	}
 	if brightness, ok := state.Attributes["brightness"]; ok {
 		payload["ha_brightness"] = brightness
+		if pct, ok := brightnessPercent(brightness); ok {
+			payload["ha_brightness_pct"] = pct
+		}
 	}
 
 	raw, err := json.Marshal(payload)
@@ -200,6 +204,32 @@ func publishHomeAssistantDeviceTelemetryFromState(
 		"entityID", entityID,
 		"state", state.State,
 	)
+}
+
+func brightnessPercent(value any) (int, bool) {
+	switch raw := value.(type) {
+	case float64:
+		return brightnessPercentFromFloat(raw)
+	case int:
+		return brightnessPercentFromFloat(float64(raw))
+	case int64:
+		return brightnessPercentFromFloat(float64(raw))
+	case json.Number:
+		parsed, err := raw.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return brightnessPercentFromFloat(parsed)
+	default:
+		return 0, false
+	}
+}
+
+func brightnessPercentFromFloat(value float64) (int, bool) {
+	if value < 0 || value > 255 {
+		return 0, false
+	}
+	return int((value / 255.0 * 100.0) + 0.5), true
 }
 
 func publishHomeAssistantStatusOnly(cfg homeAssistantTelemetryConfig, deviceID, accessToken string, online bool) {

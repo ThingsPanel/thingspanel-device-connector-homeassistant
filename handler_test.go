@@ -40,3 +40,13 @@ func TestNormalizedDeviceNumberIsDeterministic(t *testing.T) {
 		t.Fatalf("expected deterministic device_number, got %q and %q", first, second)
 	}
 }
+
+func TestBrightnessPercentFromFloat(t *testing.T) {
+	got, ok := brightnessPercentFromFloat(128)
+	if !ok {
+		t.Fatal("expected brightness conversion ok")
+	}
+	if got != 50 {
+		t.Fatalf("expected 128 to map to 50%%, got %d", got)
+	}
+}
