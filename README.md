@@ -12,7 +12,7 @@ ThingsPanel `DeviceConnector` for Home Assistant. This is the new connector runt
 
 - Discover Home Assistant entities through the HA REST API
 - Control standard switch/light style entities through the internal MQTT command bridge
-- Publish state/telemetry back to ThingsPanel on HA `state_changed` events (passthrough frequency)
+- Publish state/telemetry back to ThingsPanel on Home Assistant `state_changed` events
 - Keep Home Assistant and Xiaomi connectors separated: HA manages entities inside Home Assistant, while `xiaomi` talks to Xiaomi cloud/LAN directly
 
 ## Runtime configuration
@@ -32,10 +32,9 @@ MQTT bridge and telemetry:
 - `HA_MQTT_USERNAME=<thingspanel-device-number>`
 - `HA_MQTT_PASSWORD=<optional>`
 - `HA_ENTITY_ID=<entity-id-used-for-local-smoke-test>`
-- `HA_TELEMETRY_MODE=stream` — default; subscribe to Home Assistant `state_changed` websocket and publish immediately (same frequency as HA)
-- `HA_TELEMETRY_MODE=poll` — legacy fixed-interval REST polling (only if you explicitly need it)
-- `HA_TELEMETRY_MODE=both` — websocket stream plus optional poll fallback
-- `HA_TELEMETRY_INTERVAL_SECONDS=30` — only used when mode is `poll` or `both`; leave unset in stream mode
+- Telemetry uses Home Assistant's authenticated `/api/websocket` `state_changed` subscription for real-time events.
+- Home Assistant REST `/api/states/{entity_id}` remains available for discovery and control queries, but is not used as a telemetry poller.
+- `ha_observed_at` is copied from Home Assistant's `last_updated`; ThingsPanel's MQTT ingestion timestamp and `devices/status/{device_id}` online state are maintained separately.
 
 ## Local run
 

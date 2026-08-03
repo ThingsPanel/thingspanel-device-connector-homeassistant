@@ -16,19 +16,17 @@ import (
 )
 
 type homeAssistantServiceHandler struct {
-	logger           *slog.Logger
-	mu               sync.RWMutex
-	devices          map[string]sdk.DeviceAddRequest
-	deviceNumberIDs  map[string]string
-	immediateTelemCh chan sdk.DeviceAddRequest
+	logger          *slog.Logger
+	mu              sync.RWMutex
+	devices         map[string]sdk.DeviceAddRequest
+	deviceNumberIDs map[string]string
 }
 
 func newHomeAssistantServiceHandler() *homeAssistantServiceHandler {
 	return &homeAssistantServiceHandler{
-		logger:           slog.Default(),
-		devices:          make(map[string]sdk.DeviceAddRequest),
-		deviceNumberIDs:  make(map[string]string),
-		immediateTelemCh: make(chan sdk.DeviceAddRequest, 32),
+		logger:          slog.Default(),
+		devices:         make(map[string]sdk.DeviceAddRequest),
+		deviceNumberIDs: make(map[string]string),
 	}
 }
 
@@ -129,10 +127,6 @@ func (h *homeAssistantServiceHandler) OnDeviceAdd(_ context.Context, req sdk.Dev
 	}
 	h.mu.Unlock()
 
-	select {
-	case h.immediateTelemCh <- req:
-	default:
-	}
 	return nil
 }
 

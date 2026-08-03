@@ -21,121 +21,21 @@ var haTelemetryMQTTClients = struct {
 type homeAssistantTelemetryConfig struct {
 	Broker   string
 	Password string
-	Interval time.Duration
-	Mode     string // stream | poll | both
 }
 
 func startHomeAssistantTelemetry(ctx context.Context, handler *homeAssistantServiceHandler) {
-	mode := strings.ToLower(strings.TrimSpace(envAny("HA_TELEMETRY_MODE", "stream")))
-	if mode == "" {
-		mode = "stream"
-	}
-
 	cfg := homeAssistantTelemetryConfig{
 		Broker:   strings.TrimSpace(envAny("TP_MQTT_BROKER", "MQTT_BROKER")),
 		Password: envAny("HA_MQTT_PASSWORD", "HOMEASSISTANT_MQTT_PASSWORD"),
-		Interval: 0,
-		Mode:     mode,
-	}
-	if raw := strings.TrimSpace(envAny("HA_TELEMETRY_INTERVAL_SECONDS")); raw != "" {
-		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
-			cfg.Interval = time.Duration(seconds) * time.Second
-		}
 	}
 	if cfg.Broker == "" {
 		slog.Info("home assistant telemetry disabled: missing TP_MQTT_BROKER")
 		return
 	}
 
-	go runHomeAssistantTelemetryCoordinator(ctx, handler, cfg)
-}
-
-func runHomeAssistantTelemetryCoordinator(ctx context.Context, handler *homeAssistantServiceHandler, cfg homeAssistantTelemetryConfig) {
-	// One-time bootstrap so ThingsPanel has current values even before the first HA event.
-	publishAllHomeAssistantTelemetry(ctx, handler, cfg)
-
-	useStream := cfg.Mode == "stream" || cfg.Mode == "both"
-	usePoll := cfg.Mode == "poll" || cfg.Mode == "both"
-
-	if useStream {
-		slog.Info("home assistant telemetry mode: HA state_changed websocket stream")
-		go runHomeAssistantStateStream(ctx, handler, cfg)
-	}
-	if usePoll && cfg.Interval > 0 {
-		slog.Info("home assistant telemetry mode: periodic poll", "interval", cfg.Interval)
-		go runHomeAssistantTelemetryPoll(ctx, handler, cfg)
-	} else if usePoll && cfg.Interval <= 0 {
-		slog.Info("home assistant telemetry poll disabled: HA_TELEMETRY_INTERVAL_SECONDS not set")
-	}
-
-	if !useStream && !usePoll {
-		slog.Warn("home assistant telemetry disabled: invalid HA_TELEMETRY_MODE", "mode", cfg.Mode)
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case device := <-handler.immediateTelemCh:
-			go func(dev sdk.DeviceAddRequest) {
-				select {
-				case <-ctx.Done():
-				case <-time.After(500 * time.Millisecond):
-					publishHomeAssistantDeviceTelemetry(ctx, handler, cfg, dev)
-				}
-			}(device)
-		}
-	}
-}
-
-func runHomeAssistantTelemetryPoll(ctx context.Context, handler *homeAssistantServiceHandler, cfg homeAssistantTelemetryConfig) {
-	ticker := time.NewTicker(cfg.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			publishAllHomeAssistantTelemetry(ctx, handler, cfg)
-		}
-	}
-}
-
-func publishAllHomeAssistantTelemetry(ctx context.Context, handler *homeAssistantServiceHandler, cfg homeAssistantTelemetryConfig) {
-	for _, device := range handler.boundDevices() {
-		publishHomeAssistantDeviceTelemetry(ctx, handler, cfg, device)
-	}
-}
-
-func publishHomeAssistantDeviceTelemetry(ctx context.Context, handler *homeAssistantServiceHandler, cfg homeAssistantTelemetryConfig, device sdk.DeviceAddRequest) {
-	accessToken := strings.TrimSpace(device.AccessToken)
-	if accessToken == "" {
-		return
-	}
-
-	deviceCfg := handler.configFor(device.DeviceID)
-	entityID := configString(deviceCfg, "entity_id", "")
-	if entityID == "" {
-		return
-	}
-
-	ha, err := handler.haClientFromConfig(deviceCfg)
-	if err != nil {
-		slog.Warn("home assistant telemetry client unavailable", "deviceID", device.DeviceID, "err", err)
-		return
-	}
-
-	queryCtx, cancel := context.WithTimeout(ctx, homeAssistantCommandTimeout)
-	defer cancel()
-
-	state, err := ha.GetState(queryCtx, entityID)
-	if err != nil {
-		slog.Warn("home assistant telemetry state query failed", "deviceID", device.DeviceID, "entityID", entityID, "err", err)
-		publishHomeAssistantStatusOnly(cfg, device.DeviceID, accessToken, false)
-		return
-	}
-	publishHomeAssistantDeviceTelemetryFromState(ctx, handler, cfg, device, state)
+	slog.Info("home assistant telemetry mode: HA state_changed websocket stream")
+	go runHomeAssistantStateStream(ctx, handler, cfg)
+	go shutdownHomeAssistantMQTTClientsOnCancel(ctx)
 }
 
 func publishHomeAssistantDeviceTelemetryFromState(
@@ -165,18 +65,15 @@ func publishHomeAssistantDeviceTelemetryFromState(
 		return
 	}
 
-	publishHomeAssistantStatus(mqttClient, device.DeviceID, true)
-
 	observedAt := time.Now().UTC().Format(time.RFC3339)
 	if raw := strings.TrimSpace(state.LastUpdated); raw != "" {
 		observedAt = raw
 	}
 
 	payload := map[string]any{
-		"ha_online":      true,
 		"ha_domain":      entityDomain(entityID),
 		"ha_entity_id":   entityID,
-		"ha_state":       state.State,
+		"ha_state":       haStateValue(state.State),
 		"ha_source":      "homeassistant-service",
 		"ha_observed_at": observedAt,
 	}
@@ -205,6 +102,18 @@ func publishHomeAssistantDeviceTelemetryFromState(
 		"entityID", entityID,
 		"state", state.State,
 	)
+}
+
+// haStateValue converts a Home Assistant state string to a float64 when it
+// represents a number (e.g. sensor readings like "69.3"), so ThingsPanel
+// stores it in number_v and can render it on a trend/curve chart. HA's API
+// always reports state as a string, even for numeric sensors, so non-numeric
+// states (e.g. "on"/"off"/"unavailable") are left as-is.
+func haStateValue(raw string) any {
+	if f, err := strconv.ParseFloat(raw, 64); err == nil {
+		return f
+	}
+	return raw
 }
 
 func brightnessPercent(value any) (int, bool) {
@@ -262,6 +171,9 @@ func appendHomeAssistantLightAttributes(payload map[string]any, attrs map[string
 }
 
 func publishHomeAssistantStatusOnly(cfg homeAssistantTelemetryConfig, deviceID, accessToken string, online bool) {
+	if strings.TrimSpace(accessToken) == "" {
+		return
+	}
 	client, err := homeAssistantMQTTClient(cfg.Broker, deviceID, accessToken, cfg.Password)
 	if err != nil {
 		return
@@ -274,7 +186,7 @@ func publishHomeAssistantStatus(client mqtt.Client, deviceID string, online bool
 	if online {
 		val = []byte("1")
 	}
-	token := client.Publish("devices/status/"+deviceID, 0, false, val)
+	token := client.Publish("devices/status/"+deviceID, 1, true, val)
 	token.WaitTimeout(3 * time.Second)
 }
 
@@ -297,6 +209,7 @@ func homeAssistantMQTTClient(broker, deviceID, accessToken, password string) (mq
 	opts.SetCleanSession(true)
 	opts.SetAutoReconnect(true)
 	opts.SetConnectRetry(true)
+	opts.SetWill("devices/status/"+deviceID, "0", 1, true)
 
 	client := mqtt.NewClient(opts)
 	token := client.Connect()
@@ -311,4 +224,25 @@ func homeAssistantMQTTClient(broker, deviceID, accessToken, password string) (mq
 	haTelemetryMQTTClients.clients[key] = client
 	haTelemetryMQTTClients.mu.Unlock()
 	return client, nil
+}
+
+func shutdownHomeAssistantMQTTClientsOnCancel(ctx context.Context) {
+	<-ctx.Done()
+
+	haTelemetryMQTTClients.mu.Lock()
+	clients := make(map[string]mqtt.Client, len(haTelemetryMQTTClients.clients))
+	for key, client := range haTelemetryMQTTClients.clients {
+		clients[key] = client
+	}
+	haTelemetryMQTTClients.mu.Unlock()
+
+	for key, client := range clients {
+		deviceID := strings.SplitN(key, ":", 2)[0]
+		if client == nil || !client.IsConnected() {
+			continue
+		}
+		token := client.Publish("devices/status/"+deviceID, 1, true, []byte("0"))
+		token.WaitTimeout(3 * time.Second)
+		client.Disconnect(250)
+	}
 }

@@ -38,6 +38,23 @@ func TestBoundDeviceForEntityID(t *testing.T) {
 	}
 }
 
+func TestHomeAssistantStateOnline(t *testing.T) {
+	for _, test := range []struct {
+		state  string
+		online bool
+	}{
+		{state: "on", online: true},
+		{state: "28.2", online: true},
+		{state: "off", online: true},
+		{state: "unknown", online: false},
+		{state: "unavailable", online: false},
+	} {
+		if got := homeAssistantStateOnline(homeAssistantState{State: test.state}); got != test.online {
+			t.Errorf("state %q: got online=%v, want %v", test.state, got, test.online)
+		}
+	}
+}
+
 func sdkDeviceAdd(deviceID, entityID, deviceNumber string) sdk.DeviceAddRequest {
 	return sdk.DeviceAddRequest{
 		DeviceID: deviceID,

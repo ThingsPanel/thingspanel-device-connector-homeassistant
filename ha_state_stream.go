@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -117,11 +116,6 @@ func runHomeAssistantStateStreamSession(
 	}
 	slog.Info("home assistant state stream subscribed", "endpoint", wsURL)
 
-	lastPublished := struct {
-		mu     sync.Mutex
-		states map[string]string
-	}{states: map[string]string{}}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -163,15 +157,18 @@ func runHomeAssistantStateStreamSession(
 			continue
 		}
 
-		lastPublished.mu.Lock()
-		if lastPublished.states[entityID] == newState {
-			lastPublished.mu.Unlock()
-			continue
-		}
-		lastPublished.states[entityID] = newState
-		lastPublished.mu.Unlock()
-
+		publishHomeAssistantStatusOnly(cfg, device.DeviceID, device.AccessToken, homeAssistantStateOnline(event.Data.NewState))
+		// Every HA state_changed event is real-time data. Do not deduplicate it.
 		publishHomeAssistantDeviceTelemetryFromState(ctx, handler, cfg, device, event.Data.NewState)
+	}
+}
+
+func homeAssistantStateOnline(state homeAssistantState) bool {
+	switch strings.ToLower(strings.TrimSpace(state.State)) {
+	case "", "unknown", "unavailable":
+		return false
+	default:
+		return true
 	}
 }
 
