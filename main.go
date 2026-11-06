@@ -29,7 +29,12 @@ func main() {
 
 	startMQTTCommandBridge(ctx, info, handler)
 	startHomeAssistantTelemetry(ctx, handler)
-	startStartupSync(ctx, info, handler)
+	syncer := startStartupSync(ctx, info, server.Platform(), handler)
+	addr := os.Getenv("HA_STATUS_ADDR")
+	if addr == "" {
+		addr = ":9002"
+	}
+	serveSyncStatus(ctx, syncer, addr)
 
 	if err := server.Run(ctx); err != nil {
 		slog.Error("server exited with error", "err", err)

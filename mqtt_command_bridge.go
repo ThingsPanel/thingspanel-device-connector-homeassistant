@@ -104,17 +104,17 @@ func (b *mqttCommandBridge) handleCommandMessage(client mqtt.Client, msg mqtt.Me
 			"messageID", messageID,
 			"err", err,
 		)
-		b.publishResponse(client, "", messageID, err)
+		b.publishResponse(client, messageID, err)
 		return
 	}
 
 	resp, err := b.handler.OnCommand(context.Background(), req)
 	if err != nil {
-		b.publishResponse(client, req.DeviceID, messageID, err)
+		b.publishResponse(client, messageID, err)
 		return
 	}
 	b.logger.Info("command handled", "deviceID", req.DeviceID, "message", resp.Message)
-	b.publishResponse(client, req.DeviceID, messageID, nil)
+	b.publishResponse(client, messageID, nil)
 }
 
 func (b *mqttCommandBridge) decodeCommand(deviceNumber string, payload []byte) (sdk.CommandRequest, error) {
@@ -136,19 +136,27 @@ func (b *mqttCommandBridge) decodeCommand(deviceNumber string, payload []byte) (
 	return sdk.CommandRequest{DeviceID: deviceID, Command: map[string]any{in.Method: params}}, nil
 }
 
-func (b *mqttCommandBridge) publishResponse(client mqtt.Client, deviceID, messageID string, err error) {
+func (b *mqttCommandBridge) publishResponse(client mqtt.Client, messageID string, err error) {
+	payload, _ := marshalMQTTCommandResponse(err)
+	token := client.Publish(mqttCommandResponseTopic(messageID), 1, false, payload)
+	token.Wait()
+	if err := token.Error(); err != nil {
+		b.logger.Warn("mqtt command response publish failed", "messageID", messageID, "err", err)
+	}
+}
+
+func marshalMQTTCommandResponse(err error) ([]byte, error) {
 	values := map[string]any{"result": 0, "message": "success", "ts": time.Now().Unix()}
 	if err != nil {
 		values["result"] = 1
 		values["errcode"] = "000"
 		values["message"] = err.Error()
 	}
-	payload, _ := json.Marshal(map[string]any{"device_id": deviceID, "values": values})
-	token := client.Publish("devices/command/response/"+messageID, 1, false, payload)
-	token.Wait()
-	if err := token.Error(); err != nil {
-		b.logger.Warn("mqtt command response publish failed", "messageID", messageID, "err", err)
-	}
+	return json.Marshal(values)
+}
+
+func mqttCommandResponseTopic(messageID string) string {
+	return "devices/command/response/" + messageID
 }
 
 func haDeviceNumberFromTopic(topic string) string {
