@@ -2,6 +2,16 @@
 
 ThingsPanel `DeviceConnector` for Home Assistant. This is the new connector runtime implementation. The local directory keeps the historical `homeassistant-service` name, but the standalone repository should be `thingspanel-device-connector-homeassistant`.
 
+## Install in ThingsPanel
+
+> This is a third-party service plugin installed in ThingsPanel. It is not a Home Assistant add-on or HACS integration, and it does not install into Home Assistant.
+
+[**Open the official ThingsPanel installation page**](https://r.thingspanel.cn/marketplace/plugins/homeassistant) · [GitHub Releases and package downloads](https://github.com/ThingsPanel/thingspanel-device-connector-homeassistant/releases)
+
+A ThingsPanel platform super administrator installs the plugin once. After installation, each tenant configures its own Home Assistant endpoint and authentication in that tenant's connection point.
+
+If you open this README from GitHub, first choose or enter the ThingsPanel platform where you want to install the plugin. When you open the entry from the ThingsPanel Resource Center, it carries the selected platform address into the installation page. The GitHub Releases page is the entry for versioned release artifacts; it currently has no published releases.
+
 ## Publish identity
 
 - `connectorKey`: `homeassistant`
