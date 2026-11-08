@@ -6,7 +6,7 @@ ThingsPanel `DeviceConnector` for Home Assistant. This is the new connector runt
 
 > This is a third-party service plugin installed in ThingsPanel. It is not a Home Assistant add-on or HACS integration, and it does not install into Home Assistant.
 
-[**Open the official ThingsPanel installation page**](https://r.thingspanel.cn/marketplace/plugins/homeassistant) · [GitHub Releases and package downloads](https://github.com/ThingsPanel/thingspanel-device-connector-homeassistant/releases)
+[**Continue to your ThingsPanel platform**](https://r.thingspanel.cn/redirect/_change/?redirect=marketplace/plugins/homeassistant) · [Plugin details](https://r.thingspanel.cn/marketplace/plugins/homeassistant) · [GitHub Releases and package downloads](https://github.com/ThingsPanel/thingspanel-device-connector-homeassistant/releases)
 
 A ThingsPanel platform super administrator installs the plugin once. After installation, each tenant configures its own Home Assistant endpoint and authentication in that tenant's connection point.
 
