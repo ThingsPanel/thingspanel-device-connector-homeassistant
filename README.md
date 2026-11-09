@@ -4,13 +4,16 @@ ThingsPanel `DeviceConnector` for Home Assistant. This is the new connector runt
 
 ## Install in ThingsPanel
 
-> This is a third-party service plugin installed in ThingsPanel. It is not a Home Assistant add-on or HACS integration, and it does not install into Home Assistant.
+> This is a third-party **service plugin for ThingsPanel**. It is not a Home Assistant add-on or a HACS integration, and nothing is installed into Home Assistant.
 
-[**Continue to your ThingsPanel platform**](https://r.thingspanel.cn/redirect/_change/?redirect=marketplace/plugins/homeassistant) · [Plugin details](https://r.thingspanel.cn/marketplace/plugins/homeassistant) · [GitHub Releases and package downloads](https://github.com/ThingsPanel/thingspanel-device-connector-homeassistant/releases)
+[![Install the Home Assistant plugin in your ThingsPanel.](./docs/images/install-in-thingspanel.svg)](https://r.thingspanel.cn/redirect/_change?redirect=apply%2Fplugin%3Ftab%3Dinstall%26plugin%3Dhomeassistant)
 
-A ThingsPanel platform super administrator installs the plugin once. After installation, each tenant configures its own Home Assistant endpoint and authentication in that tenant's connection point.
+Click the button, enter the address of your ThingsPanel platform, and you are taken to **Application management → Plugin management → Plugin install**, with Home Assistant selected.
 
-If you open this README from GitHub, first choose or enter the ThingsPanel platform where you want to install the plugin. When you open the entry from the ThingsPanel Resource Center, it carries the selected platform address into the installation page. The GitHub Releases page is the entry for versioned release artifacts; it currently has no published releases.
+1. A **platform super administrator** installs the plugin once. The installation asks for no Home Assistant address or token.
+2. Each **tenant** then adds its own connection point under **Device access → Third-party access → Home Assistant**, entering its own Home Assistant address and long-lived access token, and picks the entities to create as devices.
+
+Other entry points: [plugin page in the Resource Center](https://r.thingspanel.cn/marketplace/plugins/homeassistant) · [signed plugin packages (GitHub Release `plugin-ha-v1.0.0`)](https://github.com/ThingsPanel/thingspanel-installer/releases/tag/plugin-ha-v1.0.0). The release assets are installed by the ThingsPanel installer and are not meant to be downloaded and run by hand. Your platform must run a ThingsPanel version that includes the plugin-install page.
 
 ## Publish identity
 

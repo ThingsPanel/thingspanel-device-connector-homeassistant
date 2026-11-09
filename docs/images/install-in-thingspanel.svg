@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="258" height="32" viewBox="0 0 258 32" role="img" aria-label="Install the Home Assistant plugin in your ThingsPanel">
+  <title>Install the Home Assistant plugin in your ThingsPanel</title>
+  <rect width="258" height="32" rx="6" fill="#2563eb"/>
+  <rect width="40" height="32" rx="6" fill="#1d4ed8"/>
+  <rect x="34" width="6" height="32" fill="#1d4ed8"/>
+  <!-- simple "T" mark -->
+  <rect x="12" y="9" width="16" height="4" rx="1" fill="#fff"/>
+  <rect x="18" y="9" width="4" height="15" rx="1" fill="#fff"/>
+  <text x="52" y="21" fill="#fff" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="13" font-weight="600">Install in your ThingsPanel</text>
+</svg>
